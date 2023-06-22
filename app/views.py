@@ -1,4 +1,4 @@
-from flask import render_template, jsonify, request
+from flask import render_template, jsonify, request, Flask
 from app import app, mysql
 from flask_cors import CORS
 import json
@@ -210,6 +210,85 @@ def delete_reward_and_penalty(reward_id):
         mysql.get_db().commit()
 
         return jsonify({'message': 'Reward and penalty information deleted successfully'}), 200
+    except Exception as e:
+        print("An error occurred:", str(e))
+        return jsonify({'error': 'An error occurred processing the request'}), 500
+
+@app.route('/rewards_and_penalties/<string:student_id>/<string:reward_id>', methods=['PUT'])
+def update_reward_and_penalty(student_id, reward_id):
+    try:
+        raw_data = request.get_data(as_text=True) 
+        data = json.loads(raw_data)
+        cursor = mysql.get_db().cursor()
+
+        query = """
+            UPDATE rewards_and_penalties
+            SET reward_plan=%s
+            WHERE student_id=%s AND reward_id=%s
+        """
+        cursor.execute(query, (data['reward_plan'], student_id, reward_id))
+        mysql.get_db().commit()
+
+        return jsonify({'message': 'Reward and Penalty information updated successfully'})
+    except Exception as e:
+        print("An error occurred:", str(e))
+        return jsonify({'error': 'An error occurred processing the request'}), 500
+
+@app.route('/rewards_and_penalties', methods=['POST'])
+def add_reward_and_penalty():
+    try:
+        raw_data = request.get_data(as_text=True)
+        data = json.loads(raw_data)
+        cursor = mysql.get_db().cursor()
+        query = """
+            INSERT INTO rewards_and_penalties (student_id, name, class, major, college, reward_id, reward_name, reward_plan)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(query, (data['student_id'], data['name'], data['class'], data['major'], data['college'], data['reward_id'], data['reward_name'], data['reward_plan']))
+        mysql.get_db().commit()
+        return jsonify({'message': 'Reward and penalty added successfully'})
+    except Exception as e:
+        print("An error occurred:", str(e))
+        return jsonify({'error': 'An error occurred processing the request'}), 500
+
+# 获取单个学生的信息
+@app.route('/student_info', methods=['POST'])
+def get_student_info():
+    try:
+        raw_data = request.get_data(as_text=True)
+        data = json.loads(raw_data)
+        cursor = mysql.get_db().cursor()
+        query = "SELECT * FROM students WHERE student_id = %s"
+        cursor.execute(query, (data['student_id'], ))
+        student_info = cursor.fetchone()
+        res = {
+            'student_id': student_info[0],
+            'name': student_info[1],
+            'class': student_info[2],
+            'major': student_info[3],
+            'college': student_info[4]
+        }
+        return jsonify(res)
+    except Exception as e:
+        print("An error occurred:", str(e))
+        return jsonify({'error': 'An error occurred processing the request'}), 500
+
+...
+@app.route('/check_student_id', methods=['POST'])
+def check_student_id():
+    try:
+        raw_data = request.get_data(as_text=True)
+        data = json.loads(raw_data)
+        student_id = data.get('student_id')
+        if student_id is None:
+            raise ValueError("Missing student_id in request data")
+        cursor = mysql.get_db().cursor()
+        query = "SELECT COUNT(*) FROM students WHERE student_id = %s"
+        cursor.execute(query, (student_id,))
+        result = cursor.fetchone()
+        exists = result[0] > 0
+        return jsonify({'exists': exists})
+
     except Exception as e:
         print("An error occurred:", str(e))
         return jsonify({'error': 'An error occurred processing the request'}), 500

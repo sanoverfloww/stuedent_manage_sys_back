@@ -1,9 +1,22 @@
-from flask import render_template, jsonify, request, Flask
+from flask import render_template, jsonify, request, Flask, make_response, send_file
 from app import app, mysql
 from flask_cors import CORS
 import json
+from io import BytesIO
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from werkzeug.utils import secure_filename
+import os
 
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+pdfmetrics.registerFont(TTFont('SimHei', 'simhei.ttf'))
 CORS(app)
+
+def allowed_file(filename):
+    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/students')
 def get_students():
@@ -33,10 +46,8 @@ def get_students():
 def update_student(student_id):
     # print(f"PUT request received for student_id: {student_id}")
     try:
-        # 获取请求的JSON数据
         raw_data = request.get_data(as_text=True)
         
-        # 使用 json 模块解析 JSON 数据
         data = json.loads(raw_data)
 
         print(f"Parsed data is: {data}")
@@ -63,17 +74,10 @@ def update_student(student_id):
 @app.route('/students/<string:student_id>', methods=['DELETE'])
 def delete_student(student_id):
     try:
-        # 创建一个光标来与MySQL互动
         cursor = mysql.get_db().cursor()
-
-        # 执行SQL查询来删除指定学生
         query = "DELETE FROM students WHERE student_id=%s"
         cursor.execute(query, (student_id,))
-
-        # 提交更改到数据库
         mysql.get_db().commit()
-
-        # 返回一个简单的响应
         return jsonify({'message': 'Student deleted successfully'}), 200
     except Exception as e:
         print("An error occurred:", str(e))
@@ -82,25 +86,17 @@ def delete_student(student_id):
 @app.route('/students', methods=['POST'])
 def add_student():
     try:
-        # 获取请求的JSON数据
         raw_data = request.get_data(as_text=True)
-        # 使用 json 模块解析 JSON 数据
         data = json.loads(raw_data)
-
-        # 创建一个光标来与MySQL互动
         cursor = mysql.get_db().cursor()
-
-        # 执行SQL查询来插入新的学生信息
         query = """
             INSERT INTO students (student_id, name, class, major, college)
             VALUES (%s, %s, %s, %s, %s)
         """
         cursor.execute(query, (data['student_id'], data['name'], data['class'], data['major'], data['college']))
 
-        # 提交更改到数据库
         mysql.get_db().commit()
 
-        # 返回一个简单的响应
         return jsonify({'message': 'Student added successfully'})
     except Exception as e:
         print("An error occurred:", str(e))
@@ -158,14 +154,11 @@ def add_grade():
 @app.route('/grades/<string:student_id>/<string:course>', methods=['PUT'])
 def update_grade(student_id, course):
     try:
-        raw_data = request.get_data(as_text=True)
-        
+        raw_data = request.get_data(as_text=True)     
         data = json.loads(raw_data)
 
-        # 创建一个光标来与MySQL互动
         cursor = mysql.get_db().cursor()
 
-        # 执行SQL查询来更新成绩信息
         query = """
             UPDATE grades
             SET grade=%s
@@ -292,3 +285,75 @@ def check_student_id():
     except Exception as e:
         print("An error occurred:", str(e))
         return jsonify({'error': 'An error occurred processing the request'}), 500
+
+@app.route('/grades/export/<string:student_id>', methods=['GET'])
+def export_grade_report(student_id):
+    try:
+        cursor = mysql.get_db().cursor()
+
+        # Get student's name
+        query = "SELECT name FROM students WHERE student_id = %s"
+        cursor.execute(query, (student_id,))
+        result = cursor.fetchone()
+        if not result:
+            return jsonify({'error': 'Student not found'})
+
+        student_name = result[0]
+
+        # Get grades
+        query = "SELECT course, grade FROM grades WHERE student_id = %s"
+        cursor.execute(query, (student_id,))
+        result = cursor.fetchall()
+        if not result:
+            return jsonify({'message': 'No grades found for the student'})
+
+        # Generate PDF report
+        buffer = BytesIO()
+        p = canvas.Canvas(buffer)
+
+        # Set up report title and student name
+        p.setFont('SimHei', 16)
+        p.drawString(100, 700, '成绩单')
+        p.setFont('SimHei', 12)
+        p.drawString(100, 670, f'学号: {student_id}')
+        p.drawString(100, 650, f'姓名: {student_name}')
+
+        # Add grade information
+        p.setFont('SimHei', 10)
+        y = 600
+        for row in result:
+            course, grade = row
+            p.drawString(100, y, f'课程: {course}')
+            p.drawString(200, y, f'成绩: {grade}')
+            y -= 20
+
+        p.showPage()
+        p.save()
+
+        buffer.seek(0)
+
+        # Return the PDF as a response
+        response = make_response(buffer.getvalue())
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=grade_report_{student_id}.pdf'
+        return response
+
+    except Exception as e:
+        print("An error occurred:", str(e))
+        return jsonify({'error': 'An error occurred processing the request'}), 500
+    
+@app.route('/upload_avatar', methods=['POST'])
+def upload_avatar():
+    # 检查文件是否存在
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    # 如果用户没有选择文件，浏览器会提交一个没有文件的部分
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        return jsonify({'success': 'Avatar uploaded successfully', 'file_path': os.path.join(app.config['UPLOAD_FOLDER'], filename)}), 200
+    else:
+        return jsonify({'error': 'Unsupported file type'}), 400
